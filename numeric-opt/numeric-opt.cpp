@@ -4,14 +4,17 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 
+#include "numeric/Passes.h"
 #include "numeric/numericDialect.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
+  numeric::registerConvertNumericToArithPass();  
 
   mlir::DialectRegistry registry;
-  mlir::registerAllDialects(registry);          
-  registry.insert<numeric::numericDialect>();     
+  mlir::registerAllDialects(registry);
+  registry.insert<numeric::numericDialect>();
+  
   return mlir::asMainReturnCode(mlir::MlirOptMain(
       argc, argv, "numeric-opt: numeric dialect standalone IR tool\n", registry));
 }
