@@ -12,32 +12,44 @@ using namespace mlir;
 namespace {
 
 //===----------------------------------------------------------------------===//
-// Conversion pattern: numeric.add -> arith.addi / arith.addf
+// Shared templated pattern for add/sub/mul
 //===----------------------------------------------------------------------===//
 
-struct ConvertNumericAddOp : public OpConversionPattern<numeric::addOp> {
-  using OpConversionPattern::OpConversionPattern;
+template <typename NumericOp, typename IntOp, typename FloatOp>
+struct ConvertNumericBinaryOp : public OpConversionPattern<NumericOp> {
+  using OpConversionPattern<NumericOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<NumericOp>::OpAdaptor;
 
   LogicalResult
-  matchAndRewrite(numeric::addOp op, OpAdaptor adaptor,
+  matchAndRewrite(NumericOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    
     Type resultType = op.getResult().getType();
     Type elementType = resultType;
     if (auto tensorType = dyn_cast<TensorType>(resultType))
       elementType = tensorType.getElementType();
 
-    // "Rewrite": replace with the matching arith op.
     if (isa<FloatType>(elementType)) {
-      rewriter.replaceOpWithNewOp<arith::AddFOp>(op, adaptor.getLhs(),
-                                                  adaptor.getRhs());
+      rewriter.template replaceOpWithNewOp<FloatOp>(op, adaptor.getLhs(),
+                                                      adaptor.getRhs());
     } else if (isa<IntegerType>(elementType)) {
-      rewriter.replaceOpWithNewOp<arith::AddIOp>(op, adaptor.getLhs(),
-                                                  adaptor.getRhs());
+      rewriter.template replaceOpWithNewOp<IntOp>(op, adaptor.getLhs(),
+                                                    adaptor.getRhs());
     } else {
-      return rewriter.notifyMatchFailure(
-          op, "numeric.add: unsupported element type for lowering");
+      return rewriter.notifyMatchFailure(op, "unsupported element type");
     }
+    return success();
+  }
+};
+
+
+struct ConvertNumericConstantOp
+    : public OpConversionPattern<numeric::constantOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(numeric::constantOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, op.getValue());
     return success();
   }
 };
@@ -52,7 +64,7 @@ struct ConvertNumericToArithPass
 
   StringRef getArgument() const final { return "convert-numeric-to-arith"; }
   StringRef getDescription() const final {
-    return "Lower numeric.add to arith.addi/arith.addf";
+    return "Lower all numeric dialect ops to arith";
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -64,10 +76,17 @@ struct ConvertNumericToArithPass
     ConversionTarget target(*context);
 
     target.addLegalDialect<arith::ArithDialect, func::FuncDialect>();
-    target.addIllegalOp<numeric::addOp>();
+    target.addIllegalOp<numeric::addOp, numeric::subOp, numeric::mulOp,
+                         numeric::constantOp>();
 
     RewritePatternSet patterns(context);
-    patterns.add<ConvertNumericAddOp>(context);
+    patterns.add<ConvertNumericBinaryOp<numeric::addOp, arith::AddIOp,
+                                         arith::AddFOp>>(context);
+    patterns.add<ConvertNumericBinaryOp<numeric::subOp, arith::SubIOp,
+                                         arith::SubFOp>>(context);
+    patterns.add<ConvertNumericBinaryOp<numeric::mulOp, arith::MulIOp,
+                                         arith::MulFOp>>(context);
+    patterns.add<ConvertNumericConstantOp>(context);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                        std::move(patterns))))

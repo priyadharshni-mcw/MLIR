@@ -29,6 +29,7 @@ def numeric_constantOp : numeric_Op<"constant", [ConstantLike, Pure]> {
   let results = (outs Numeric_ScalarOrTensor:$result);
   
   let hasVerifier = 1;
+  let hasFolder = 1;
 
 }
 

@@ -26,5 +26,9 @@ LogicalResult constantOp::verify() {
   return success();
 }
 
+OpFoldResult constantOp::fold(FoldAdaptor adaptor) {
+   return getValue();
+}
+
 #define GET_OP_CLASSES
 #include "numeric/numericOps.cpp.inc"
