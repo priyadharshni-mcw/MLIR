@@ -1,3 +1,6 @@
+#include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"
@@ -9,12 +12,17 @@
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
-  numeric::registerConvertNumericToArithPass();  
+  numeric::registerConvertNumericToArithPass();
 
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
   registry.insert<numeric::numericDialect>();
-  
+
+
+  mlir::arith::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(registry);
+
   return mlir::asMainReturnCode(mlir::MlirOptMain(
       argc, argv, "numeric-opt: numeric dialect standalone IR tool\n", registry));
 }
