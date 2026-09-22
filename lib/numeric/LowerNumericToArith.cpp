@@ -6,6 +6,10 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Interfaces/DestinationStyleOpInterface.h"
+#include "mlir/Interfaces/ParallelCombiningOpInterface.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 
 using namespace mlir;
 
@@ -54,6 +58,59 @@ struct ConvertNumericConstantOp
   }
 };
 
+
+
+
+//===----------------------------------------------------------------------===//
+// ArangeOp -> tensor.empty + linalg.generic  
+//===----------------------------------------------------------------------===//
+
+struct ConvertNumericArangeOp : public OpConversionPattern<numeric::arangeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(numeric::arangeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value start = adaptor.getStart();
+    Value end = adaptor.getEnd();
+    Value step = adaptor.getStep();
+    Type elementType = start.getType();
+
+    if (!isa<IntegerType>(elementType))
+      return rewriter.notifyMatchFailure(op, "only integer arange supported so far");
+
+    // 1. n = ceil((end - start) / step)
+    Value diff = rewriter.create<arith::SubIOp>(loc, end, start);
+    Value nInt = rewriter.create<arith::CeilDivSIOp>(loc, diff, step);
+    Value n = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(), nInt);
+
+    // 2. empty output tensor of that dynamic size
+    auto resultType = cast<RankedTensorType>(op.getResult().getType());
+    Value empty = rewriter.create<tensor::EmptyOp>(loc, resultType, ValueRange{n});
+
+    // 3. fill it: value at position i is start + i * step
+    SmallVector<AffineMap> maps = {
+        AffineMap::getMultiDimIdentityMap(1, rewriter.getContext())};
+    SmallVector<utils::IteratorType> iterators = {utils::IteratorType::parallel};
+
+    auto generic = rewriter.create<linalg::GenericOp>(
+        loc, resultType, /*inputs=*/ValueRange{}, /*outputs=*/ValueRange{empty},
+        maps, iterators,
+        [&](OpBuilder &b, Location nestedLoc, ValueRange args) {
+          Value index = b.create<linalg::IndexOp>(nestedLoc, 0);
+          Value indexCast =
+              b.create<arith::IndexCastOp>(nestedLoc, elementType, index);
+          Value scaled = b.create<arith::MulIOp>(nestedLoc, indexCast, step);
+          Value value = b.create<arith::AddIOp>(nestedLoc, start, scaled);
+          b.create<linalg::YieldOp>(nestedLoc, value);
+        });
+
+    rewriter.replaceOp(op, generic.getResults());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // The pass
 //===----------------------------------------------------------------------===//
@@ -68,7 +125,7 @@ struct ConvertNumericToArithPass
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<arith::ArithDialect>();
+    registry.insert<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect>();
   }
 
   void runOnOperation() override {
@@ -78,6 +135,11 @@ struct ConvertNumericToArithPass
     target.addLegalDialect<arith::ArithDialect, func::FuncDialect>();
     target.addIllegalOp<numeric::addOp, numeric::subOp, numeric::mulOp,
                          numeric::constantOp>();
+                         
+    target.addLegalDialect<arith::ArithDialect, func::FuncDialect,
+                        linalg::LinalgDialect, tensor::TensorDialect>();
+    target.addIllegalOp<numeric::addOp, numeric::subOp, numeric::mulOp,
+                     numeric::constantOp, numeric::arangeOp>();
 
     RewritePatternSet patterns(context);
     patterns.add<ConvertNumericBinaryOp<numeric::addOp, arith::AddIOp,
@@ -87,6 +149,7 @@ struct ConvertNumericToArithPass
     patterns.add<ConvertNumericBinaryOp<numeric::mulOp, arith::MulIOp,
                                          arith::MulFOp>>(context);
     patterns.add<ConvertNumericConstantOp>(context);
+    patterns.add<ConvertNumericArangeOp>(context);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                        std::move(patterns))))

@@ -76,3 +76,26 @@ def numeric_subOp : numeric_Op<"sub", [Pure,
 }
 
 #endif // NUMERIC_OPS
+
+def numeric_arangeOp : numeric_Op<"arange", [Pure, SameTypeOperands]> {
+  let summary = "Generates a 1-D tensor of evenly spaced values (torch.arange semantics)";
+  let description = [{
+    Produces a 1-D tensor containing values `[start, start+step, start+2*step, ...]`
+    up to but not including `end`, mirroring PyTorch's `torch.arange`. The
+    element count is `ceil((end - start) / step)`, so the result generally
+    has a dynamic shape.
+
+    Example:
+```mlir
+    %0 = numeric.arange %start, %end, %step : (i64, i64, i64) -> tensor<?xi64>
+```
+  }];
+
+  let arguments = (ins AnyTypeOf<[AnyInteger, AnyFloat]>:$start,
+                        AnyTypeOf<[AnyInteger, AnyFloat]>:$end,
+                        AnyTypeOf<[AnyInteger, AnyFloat]>:$step);
+  let results = (outs AnyTensor:$result);
+
+  let assemblyFormat = "$start `,` $end `,` $step attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
