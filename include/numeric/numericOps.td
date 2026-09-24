@@ -99,3 +99,24 @@ def numeric_arangeOp : numeric_Op<"arange", [Pure, SameTypeOperands]> {
   let assemblyFormat = "$start `,` $end `,` $step attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
+
+def numeric_addcmulOp : numeric_Op<"addcmul", [Pure]> {
+  let summary = "Elementwise multiply-add: out = input + value * tensor1 * tensor2";
+  let description = [{
+    Mirrors torch.addcmul. Performs the element-wise multiplication of tensor1 by tensor2, multiplies the result by the scalar value and adds it to input
+    result = input + value * tensor1 * tensor2
+
+    Example:
+    %r = numeric.addcmul %input, %t1, %t2, %value
+        : (tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, i64) -> tensor<4xi64>
+  }];
+
+  let arguments = (ins  TensorOf<[AnyInteger, AnyFloat]>:$input,
+                        TensorOf<[AnyInteger, AnyFloat]>:$tensor1,
+                        TensorOf<[AnyInteger, AnyFloat]>:$tensor2,
+                        AnyTypeOf<[AnyInteger, AnyFloat]>:$value);
+  let results = (outs TensorOf<[AnyInteger, AnyFloat]>:$result);
+
+  let assemblyFormat = "$input `,` $tensor1 `,` $tensor2 `,` $value attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}

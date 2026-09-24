@@ -111,6 +111,49 @@ struct ConvertNumericArangeOp : public OpConversionPattern<numeric::arangeOp> {
   }
 };
 
+struct ConvertNumericAddcmulOp
+    : public OpConversionPattern<numeric::addcmulOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(numeric::addcmulOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type resultType = op.getResult().getType();
+    Value value = adaptor.getValue();
+
+    // temp = tensor1 * tensor2  -- same type throughout, reuse numeric.mul.
+    Value temp = rewriter.create<numeric::mulOp>(
+        loc, resultType, adaptor.getTensor1(), adaptor.getTensor2());
+
+    Value scaled;
+    auto tensorType = dyn_cast<RankedTensorType>(resultType);
+      // temp (tensor) * value (scalar) -- 
+      unsigned rank = tensorType.getRank();
+      SmallVector<AffineMap> maps(
+          2, AffineMap::getMultiDimIdentityMap(rank, rewriter.getContext()));
+      SmallVector<utils::IteratorType> iterators(rank, utils::IteratorType::parallel);
+
+      auto generic = rewriter.create<linalg::GenericOp>(
+          loc, resultType, /*inputs=*/ValueRange{temp}, /*outputs=*/ValueRange{temp},
+          maps, iterators,
+          [&](OpBuilder &b, Location nestedLoc, ValueRange args) {
+            Value elem = args[0];
+            Value mul = isa<FloatType>(tensorType.getElementType())
+                ? b.create<arith::MulFOp>(nestedLoc, elem, value).getResult()
+                : b.create<arith::MulIOp>(nestedLoc, elem, value).getResult();
+            b.create<linalg::YieldOp>(nestedLoc, mul);
+          });
+      scaled = generic.getResult(0);
+
+    Value result = rewriter.create<numeric::addOp>(
+        loc, resultType, adaptor.getInput(), scaled);
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // The pass
 //===----------------------------------------------------------------------===//
@@ -140,6 +183,9 @@ struct ConvertNumericToArithPass
                         linalg::LinalgDialect, tensor::TensorDialect>();
     target.addIllegalOp<numeric::addOp, numeric::subOp, numeric::mulOp,
                      numeric::constantOp, numeric::arangeOp>();
+    target.addIllegalOp<numeric::addOp, numeric::subOp, numeric::mulOp,
+                     numeric::constantOp, numeric::arangeOp,
+                     numeric::addcmulOp>(); 
 
     RewritePatternSet patterns(context);
     patterns.add<ConvertNumericBinaryOp<numeric::addOp, arith::AddIOp,
@@ -150,6 +196,7 @@ struct ConvertNumericToArithPass
                                          arith::MulFOp>>(context);
     patterns.add<ConvertNumericConstantOp>(context);
     patterns.add<ConvertNumericArangeOp>(context);
+    patterns.add<ConvertNumericAddcmulOp>(context);  
 
     if (failed(applyPartialConversion(getOperation(), target,
                                        std::move(patterns))))
