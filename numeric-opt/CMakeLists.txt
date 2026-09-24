@@ -11,6 +11,7 @@ set(LIBS
   MLIRArithTransforms
   MLIRTensorTransforms
   MLIRBufferizationTransforms
+  MLIRTosaDialect
 )
 
 add_llvm_executable(numeric-opt numeric-opt.cpp)

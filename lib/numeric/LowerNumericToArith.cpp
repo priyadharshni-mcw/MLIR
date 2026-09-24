@@ -10,6 +10,7 @@
 #include "mlir/Interfaces/ParallelCombiningOpInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
 
 using namespace mlir;
 
@@ -111,6 +112,8 @@ struct ConvertNumericArangeOp : public OpConversionPattern<numeric::arangeOp> {
   }
 };
 
+
+
 struct ConvertNumericAddcmulOp
     : public OpConversionPattern<numeric::addcmulOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -120,36 +123,87 @@ struct ConvertNumericAddcmulOp
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Type resultType = op.getResult().getType();
-    Value value = adaptor.getValue();
 
-    // temp = tensor1 * tensor2  -- same type throughout, reuse numeric.mul.
-    Value temp = rewriter.create<numeric::mulOp>(
-        loc, resultType, adaptor.getTensor1(), adaptor.getTensor2());
+    
+    auto shiftType = RankedTensorType::get({1}, rewriter.getIntegerType(8));
+    auto shiftAttr = DenseElementsAttr::get(shiftType, static_cast<int8_t>(0));
+    Value shift = rewriter.create<tosa::ConstOp>(loc, shiftType, shiftAttr);
 
-    Value scaled;
-    auto tensorType = dyn_cast<RankedTensorType>(resultType);
-      // temp (tensor) * value (scalar) -- 
-      unsigned rank = tensorType.getRank();
-      SmallVector<AffineMap> maps(
-          2, AffineMap::getMultiDimIdentityMap(rank, rewriter.getContext()));
-      SmallVector<utils::IteratorType> iterators(rank, utils::IteratorType::parallel);
+    Value valueTensor =
+        rewriter.create<tensor::FromElementsOp>(loc, ValueRange{adaptor.getValue()});
 
-      auto generic = rewriter.create<linalg::GenericOp>(
-          loc, resultType, /*inputs=*/ValueRange{temp}, /*outputs=*/ValueRange{temp},
-          maps, iterators,
-          [&](OpBuilder &b, Location nestedLoc, ValueRange args) {
-            Value elem = args[0];
-            Value mul = isa<FloatType>(tensorType.getElementType())
-                ? b.create<arith::MulFOp>(nestedLoc, elem, value).getResult()
-                : b.create<arith::MulIOp>(nestedLoc, elem, value).getResult();
-            b.create<linalg::YieldOp>(nestedLoc, mul);
-          });
-      scaled = generic.getResult(0);
-
-    Value result = rewriter.create<numeric::addOp>(
+    // temp = tensor1 * tensor2
+    Value temp = rewriter.create<tosa::MulOp>(
+        loc, resultType, adaptor.getTensor1(), adaptor.getTensor2(), shift);
+    // scaled = temp * value  (broadcast)
+    Value scaled = rewriter.create<tosa::MulOp>(
+        loc, resultType, temp, valueTensor, shift);
+    // result = input + scaled
+    Value result = rewriter.create<tosa::AddOp>(
         loc, resultType, adaptor.getInput(), scaled);
 
     rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct ConvertNumericDivideOp
+    : public OpConversionPattern<numeric::divideOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(numeric::divideOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type resultType = op.getResult().getType();
+    auto tensorType = cast<RankedTensorType>(resultType);
+
+    if (isa<IntegerType>(tensorType.getElementType())) {
+      // tosa.intdiv handles integer division directly.
+      rewriter.replaceOpWithNewOp<tosa::IntDivOp>(
+          op, resultType, adaptor.getNumerator(), adaptor.getDenominator());
+      return success();
+    }
+
+    // Float: 
+    Value reciprocal = rewriter.create<tosa::ReciprocalOp>(
+        loc, resultType, adaptor.getDenominator());
+
+    auto shiftType = RankedTensorType::get({1}, rewriter.getIntegerType(8));
+    auto shiftAttr = DenseElementsAttr::get(shiftType, static_cast<int8_t>(0));
+    Value shift = rewriter.create<tosa::ConstOp>(loc, shiftType, shiftAttr);
+
+    rewriter.replaceOpWithNewOp<tosa::MulOp>(
+        op, resultType, adaptor.getNumerator(), reciprocal, shift);
+    return success();
+  }
+};
+
+
+
+struct ConvertNumericAddOp : public OpConversionPattern<numeric::addOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(numeric::addOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = op.getResult().getType();
+
+    if (auto tensorType = dyn_cast<RankedTensorType>(resultType)) {
+      // Tensor case: route through tosa.add for native broadcast support.
+      rewriter.replaceOpWithNewOp<tosa::AddOp>(op, resultType,
+                                                adaptor.getLhs(), adaptor.getRhs());
+      return success();
+    }
+
+    // Scalar case: tosa.add can't take plain scalars -- keep the arith path.
+    if (isa<FloatType>(resultType)) {
+      rewriter.replaceOpWithNewOp<arith::AddFOp>(op, adaptor.getLhs(),
+                                                  adaptor.getRhs());
+    } else {
+      rewriter.replaceOpWithNewOp<arith::AddIOp>(op, adaptor.getLhs(),
+                                                  adaptor.getRhs());
+    }
     return success();
   }
 };
@@ -168,28 +222,23 @@ struct ConvertNumericToArithPass
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect>();
+    registry.insert<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect, tosa::TosaDialect>();
   }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ConversionTarget target(*context);
 
-    target.addLegalDialect<arith::ArithDialect, func::FuncDialect>();
-    target.addIllegalOp<numeric::addOp, numeric::subOp, numeric::mulOp,
-                         numeric::constantOp>();
-                         
+                            
     target.addLegalDialect<arith::ArithDialect, func::FuncDialect,
-                        linalg::LinalgDialect, tensor::TensorDialect>();
-    target.addIllegalOp<numeric::addOp, numeric::subOp, numeric::mulOp,
-                     numeric::constantOp, numeric::arangeOp>();
+                        linalg::LinalgDialect, tensor::TensorDialect, tosa::TosaDialect>();
     target.addIllegalOp<numeric::addOp, numeric::subOp, numeric::mulOp,
                      numeric::constantOp, numeric::arangeOp,
-                     numeric::addcmulOp>(); 
+                     numeric::addcmulOp, numeric::divideOp>(); 
+              
 
     RewritePatternSet patterns(context);
-    patterns.add<ConvertNumericBinaryOp<numeric::addOp, arith::AddIOp,
-                                         arith::AddFOp>>(context);
+    patterns.add<ConvertNumericAddOp>(context);
     patterns.add<ConvertNumericBinaryOp<numeric::subOp, arith::SubIOp,
                                          arith::SubFOp>>(context);
     patterns.add<ConvertNumericBinaryOp<numeric::mulOp, arith::MulIOp,
@@ -197,6 +246,7 @@ struct ConvertNumericToArithPass
     patterns.add<ConvertNumericConstantOp>(context);
     patterns.add<ConvertNumericArangeOp>(context);
     patterns.add<ConvertNumericAddcmulOp>(context);  
+    patterns.add<ConvertNumericDivideOp>(context);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                        std::move(patterns))))

@@ -120,3 +120,19 @@ def numeric_addcmulOp : numeric_Op<"addcmul", [Pure]> {
   let assemblyFormat = "$input `,` $tensor1 `,` $tensor2 `,` $value attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
+
+
+def numeric_divideOp : numeric_Op<"divide", [Pure, SameOperandsAndResultType]> {
+  let summary = "Elementwise division: out = numerator / denominator";
+  let description = [{
+   
+    Decomposed via tosa: integer division uses tosa.intdiv directly;
+    floating-point division uses tosa.reciprocal + tosa.mul, p
+  }];
+
+  let arguments = (ins TensorOf<[AnyInteger, AnyFloat]>:$numerator,
+                        TensorOf<[AnyInteger, AnyFloat]>:$denominator);
+  let results = (outs TensorOf<[AnyInteger, AnyFloat]>:$result);
+
+  let assemblyFormat = "$numerator `,` $denominator attr-dict `:` type($result)";
+}

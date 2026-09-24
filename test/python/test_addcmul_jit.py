@@ -18,7 +18,7 @@ from mlir_numeric.dialects import numeric_nanobind as numeric_d
 LOWER_TO_LLVM_PIPELINE = (
     "builtin.module("
     "convert-numeric-to-arith,"
-    "convert-elementwise-to-linalg,"
+    "func.func(tosa-to-linalg),"
     "one-shot-bufferize{bufferize-function-boundaries=true},"
     "convert-linalg-to-loops,"
     "convert-scf-to-cf,"
