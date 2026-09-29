@@ -7,6 +7,7 @@ def numeric_Dialect : Dialect {
     let name = "numeric";
     let summary = "A simple numeric dialect for arithmetic operations";
     let cppNamespace = "::numeric";
+    let hasConstantMaterializer = 1;  
     let description = [{
         This dialect defines basic arithmetic operations, starting with
         addition.

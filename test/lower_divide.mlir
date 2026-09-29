@@ -28,4 +28,8 @@ func.func @add_scalar(%a: i64, %b: i64) -> i64 {
 
 // CHECK-LABEL: func.func @add_tensor
 func.func @add_tensor(%a: tensor<4xi64>, %b: tensor<4xi64>) -> tensor<4xi64> {
-  //
+  // CHECK: tosa.add
+  // CHECK-NOT: numeric.
+  %0 = numeric.add %a, %b : tensor<4xi64>
+  return %0 : tensor<4xi64>
+}

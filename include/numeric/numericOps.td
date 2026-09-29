@@ -45,6 +45,7 @@ def numeric_addOp : numeric_Op<"add", [Pure, Commutative,
                         Numeric_ScalarOrTensor:$rhs);
   let results   = (outs Numeric_ScalarOrTensor:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -59,6 +60,7 @@ def numeric_mulOp : numeric_Op<"mul", [Pure, Commutative,
                         Numeric_ScalarOrTensor:$rhs);
   let results   = (outs Numeric_ScalarOrTensor:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -73,6 +75,7 @@ def numeric_subOp : numeric_Op<"sub", [Pure,
                         Numeric_ScalarOrTensor:$rhs);
   let results   = (outs Numeric_ScalarOrTensor:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let hasFolder = 1;
 }
 
 #endif // NUMERIC_OPS
@@ -129,7 +132,7 @@ def numeric_divideOp : numeric_Op<"divide", [Pure, SameOperandsAndResultType]> {
     Decomposed via tosa: integer division uses tosa.intdiv directly;
     floating-point division uses tosa.reciprocal + tosa.mul, p
   }];
-
+  let hasFolder = 1;
   let arguments = (ins TensorOf<[AnyInteger, AnyFloat]>:$numerator,
                         TensorOf<[AnyInteger, AnyFloat]>:$denominator);
   let results = (outs TensorOf<[AnyInteger, AnyFloat]>:$result);
